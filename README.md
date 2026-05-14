@@ -1,7 +1,8 @@
 # Mattermost Exporter
 
-This unpacked browser extension injects an `export` button into Mattermost pages Simply go to Mattermost and click the export button to get started. The exported data can be conveniently viewed offline, and be imported to Matrix 
-using the matrix-mattermost-importer extension (https://github.com/highIander/matrix-mattermost-importer).
+This unpacked browser extension injects an `export` button into Mattermost pages Simply go to Mattermost and click the export button to get started. The exported data can be conveniently viewed offline, and be imported to Matrix using the matrix-mattermost-importer extension (https://github.com/highIander/matrix-mattermost-importer).
+
+**Plese note the Standalone Viewer note at the end of this document!**
 
 License: None (use as you like). No liability is taken by the author!
 
@@ -62,7 +63,7 @@ For writing the export folder, the browser must support the File System Access A
 
 ## Standalone viewer note
 
-`standalone.html` is convenient but can become very large because it embeds JSON chunks and exported image/file data directly. For very large exports, `index.html` plus the folder structure is the more robust viewer. After opening index.html, select the export directory (usually the same directory where you just opened the index.html). To avoid this additional step, you can simply copy the export directory to a (local) webserver. One simple local option is XAMPP / Apache Friends: https://www.apachefriends.org/index.html
+`standalone.html` is convenient but can become very large because it embeds JSON chunks and exported image/file data directly. For very large exports, you should NOT enable it and leave the checkboc unchecked! In that case, all data can be viewed later simply by opening `index.html` in the export directory. After opening index.html, select the export directory (usually the same directory where you just opened the index.html). To avoid this additional step, you can simply copy the export directory to a (local) webserver. One simple local option is XAMPP / Apache Friends: https://www.apachefriends.org/index.html
 
 When `index.html` is opened directly from disk, browsers often block automatic reads of neighboring files such as `manifest.json`, `users.json`, `data/`, and `assets/`. The viewer therefore offers two folder-selection mechanisms:
 
