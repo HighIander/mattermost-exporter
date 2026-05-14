@@ -1,6 +1,7 @@
 # Mattermost Static Exporter Extension
 
-This unpacked browser extension injects an `export` button into Mattermost pages. 
+This unpacked browser extension injects an `export` button into Mattermost pages Simply go to Mattermost and click the export button to get started. The exported data can be conveniently viewed offline, and be imported to Matrix 
+using the matrix-mattermost-importer extension (https://github.com/highIander/matrix-mattermost-importer).
 
 License: None (use as you like). No liability is taken by the author!
 
