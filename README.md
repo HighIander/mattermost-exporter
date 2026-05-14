@@ -9,6 +9,7 @@ This unpacked browser extension injects an `export` button into Mattermost pages
   - images,
   - other files,
   - maximum file size,
+  - start and end date range,
   - direct messages/group messages.
 - Team and channel selection before export.
 - Progress bar and cancel button during export.

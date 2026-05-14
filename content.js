@@ -20,8 +20,13 @@
     teams: [],
     channels: [],
     loaded: false,
+    loadingInventory: false,
     exporting: false,
     cancelRequested: false,
+    progressPercent: 0,
+    progressText: "",
+    progressIsError: false,
+    progressClosedAfterCancel: false,
     selectedChannels: new Set(),
     teamCheckboxes: new Map(),
     channelCheckboxes: new Map(),
@@ -34,11 +39,19 @@
     postsPerChunk: 500,
     requestDelayMs: 80,
     includeImages: true,
-    includeOtherFiles: false,
+    includeOtherFiles: true,
     includeDirectMessages: true,
-    createStandaloneHtml: true,
+    createStandaloneHtml: false,
     maxFileSizeMb: ""
   };
+
+  function inventoryLoadingHtml() {
+    return '' +
+      '<div class="mmx-option-card">' +
+        '<strong>Loading Mattermost teams and channels...</strong>' +
+        '<div class="mmx-loading-note">Please wait, this can take a minute!</div>' +
+      '</div>';
+  }
 
   function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
@@ -46,6 +59,51 @@
 
   function todayString() {
     return new Date().toISOString().slice(0, 10);
+  }
+
+  function parseDateInput(value, addDays) {
+    const raw = String(value || "").trim();
+
+    if (!raw) {
+      return {
+        raw: "",
+        timestamp: null,
+        error: ""
+      };
+    }
+
+    const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+
+    if (!match) {
+      return {
+        raw,
+        timestamp: null,
+        error: "Use YYYY-MM-DD dates for the export time range."
+      };
+    }
+
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    const check = new Date(year, month - 1, day);
+
+    if (
+      check.getFullYear() !== year ||
+      check.getMonth() !== month - 1 ||
+      check.getDate() !== day
+    ) {
+      return {
+        raw,
+        timestamp: null,
+        error: "Use valid calendar dates for the export time range."
+      };
+    }
+
+    return {
+      raw,
+      timestamp: new Date(year, month - 1, day + addDays).getTime(),
+      error: ""
+    };
   }
 
   function sanitizePathSegment(value) {
@@ -390,6 +448,13 @@
     const maxFileBytes = Number.isFinite(maxFileSizeMb) && maxFileSizeMb >= 0
       ? maxFileSizeMb * 1024 * 1024
       : Infinity;
+    const startDate = parseDateInput(document.getElementById("mmx-start-date")?.value, 0);
+    const endDate = parseDateInput(document.getElementById("mmx-end-date")?.value, 1);
+    let timeRangeError = startDate.error || endDate.error;
+
+    if (!timeRangeError && Number.isFinite(startDate.timestamp) && Number.isFinite(endDate.timestamp) && endDate.timestamp <= startDate.timestamp) {
+      timeRangeError = "End date must be on or after the start date.";
+    }
 
     return {
       perPage: DEFAULTS.perPage,
@@ -399,7 +464,12 @@
       includeOtherFiles,
       includeDirectMessages,
       createStandaloneHtml,
-      maxFileBytes
+      maxFileBytes,
+      startDate: startDate.raw,
+      endDate: endDate.raw,
+      startCreateAtMs: startDate.timestamp,
+      endCreateAtExclusiveMs: endDate.timestamp,
+      timeRangeError
     };
   }
 
@@ -415,6 +485,20 @@
     }
 
     return false;
+  }
+
+  function postMatchesTimeRange(post, options) {
+    const createAt = Number(post.create_at || 0);
+
+    if (Number.isFinite(options.startCreateAtMs) && createAt < options.startCreateAtMs) {
+      return false;
+    }
+
+    if (Number.isFinite(options.endCreateAtExclusiveMs) && createAt >= options.endCreateAtExclusiveMs) {
+      return false;
+    }
+
+    return true;
   }
 
 
@@ -571,36 +655,129 @@
     await writable.close();
   }
 
-  function updateProgress(percent, text) {
+  function renderProgressState() {
     const progressWrap = document.getElementById("mmx-progress-wrap");
     const progressFill = document.getElementById("mmx-progress-fill");
     const status = document.getElementById("mmx-status");
+    const compactProgressFill = document.getElementById("mmx-compact-progress-fill");
+    const compactStatus = document.getElementById("mmx-compact-status");
 
     if (progressWrap) {
       progressWrap.classList.add("mmx-active");
     }
 
     if (progressFill) {
-      progressFill.style.width = Math.max(0, Math.min(100, percent)) + "%";
+      progressFill.style.width = runtimeState.progressPercent + "%";
     }
 
     if (status) {
-      status.classList.remove("mmx-error");
-      status.textContent = text || "";
+      status.classList.toggle("mmx-error", runtimeState.progressIsError);
+      status.textContent = runtimeState.progressText;
+    }
+
+    if (compactProgressFill) {
+      compactProgressFill.style.width = runtimeState.progressPercent + "%";
+    }
+
+    if (compactStatus) {
+      compactStatus.classList.toggle("mmx-error", runtimeState.progressIsError);
+      compactStatus.textContent = runtimeState.progressText;
     }
   }
 
-  function showError(text) {
-    const status = document.getElementById("mmx-status");
-    const progressWrap = document.getElementById("mmx-progress-wrap");
+  function updateProgress(percent, text) {
+    runtimeState.progressPercent = Math.max(0, Math.min(100, percent));
+    runtimeState.progressText = text || "";
+    runtimeState.progressIsError = false;
+    renderProgressState();
+  }
 
-    if (progressWrap) {
-      progressWrap.classList.add("mmx-active");
+  function showError(text) {
+    runtimeState.progressText = text || "Unknown error";
+    runtimeState.progressIsError = true;
+    renderProgressState();
+  }
+
+  function createCompactProgressDialog() {
+    if (document.getElementById("mmx-compact-progress")) {
+      return;
     }
 
-    if (status) {
-      status.classList.add("mmx-error");
-      status.textContent = text || "Unknown error";
+    const compactProgress = document.createElement("div");
+    compactProgress.id = "mmx-compact-progress";
+    compactProgress.className = "mmx-hidden";
+    compactProgress.innerHTML = `
+      <div class="mmx-compact-card" role="dialog" aria-label="Export progress" aria-live="polite">
+        <div class="mmx-compact-header">
+          <strong>Export in progress</strong>
+          <button id="mmx-compact-cancel" type="button">Cancel</button>
+        </div>
+        <div id="mmx-compact-progress-bar"><div id="mmx-compact-progress-fill"></div></div>
+        <div id="mmx-compact-status"></div>
+      </div>
+    `;
+
+    document.documentElement.appendChild(compactProgress);
+    document.getElementById("mmx-compact-cancel").addEventListener("click", requestExportCancelAndCloseUi);
+    renderProgressState();
+  }
+
+  function showCompactProgressDialog() {
+    if (runtimeState.progressClosedAfterCancel) {
+      return;
+    }
+
+    createCompactProgressDialog();
+
+    const compactProgress = document.getElementById("mmx-compact-progress");
+
+    if (compactProgress) {
+      compactProgress.classList.remove("mmx-hidden");
+    }
+
+    renderProgressState();
+  }
+
+  function hideCompactProgressDialog() {
+    const compactProgress = document.getElementById("mmx-compact-progress");
+
+    if (compactProgress) {
+      compactProgress.classList.add("mmx-hidden");
+    }
+  }
+
+  function hideFullDialog() {
+    const overlay = document.getElementById("mmx-overlay");
+
+    if (overlay) {
+      overlay.classList.add("mmx-hidden");
+    }
+  }
+
+  function requestExportCancelAndCloseUi() {
+    runtimeState.cancelRequested = true;
+    runtimeState.progressClosedAfterCancel = true;
+    updateProgress(runtimeState.progressPercent, "Cancelling after the current request finishes...");
+    hideFullDialog();
+    hideCompactProgressDialog();
+  }
+
+  function updateStartExportButton() {
+    const startButton = document.getElementById("mmx-start");
+
+    if (startButton) {
+      startButton.disabled = runtimeState.loadingInventory || runtimeState.exporting;
+    }
+  }
+
+  function setInventoryLoading(isLoading) {
+    runtimeState.loadingInventory = isLoading;
+    updateStartExportButton();
+
+    const summary = document.getElementById("mmx-selection-summary");
+
+    if (summary && isLoading) {
+      summary.textContent = "Searching teams and channels. Please wait, this can take a minute!";
     }
   }
 
@@ -667,25 +844,43 @@
             <label><input type="checkbox" id="mmx-include-images" checked> Include images</label>
           </div>
           <div class="mmx-option-card">
-            <label><input type="checkbox" id="mmx-include-other-files"> Include other files</label>
+            <label><input type="checkbox" id="mmx-include-other-files" checked> Include other files</label>
           </div>
           <div class="mmx-option-card">
             <label><input type="checkbox" id="mmx-include-dms" checked> Include direct messages</label>
           </div>
           <div class="mmx-option-card">
-            <label><input type="checkbox" id="mmx-create-standalone" checked> Also create standalone.html</label>
+            <div class="mmx-option-line">
+              <label><input type="checkbox" id="mmx-create-standalone"> Also create standalone.html</label>
+              <span class="mmx-standalone-info">
+                <button class="mmx-attention-icon" type="button" aria-label="Standalone warning" aria-describedby="mmx-standalone-popup">!</button>
+                <span class="mmx-standalone-popup" id="mmx-standalone-popup" role="tooltip">
+                  <strong>Standalone warning:</strong> <code>standalone.html</code> embeds all selected JSON data and exported assets directly into one file.
+                  It can become extremely large and may be slow to open or fail in the browser for large exports.
+                  For larger exports, copy the complete export folder to a webserver destination and open <code>index.html</code> there.
+                  A simple local option is <a href="https://www.apachefriends.org/index.html" target="_blank" rel="noopener noreferrer">XAMPP / Apache Friends</a>.
+                </span>
+              </span>
+            </div>
           </div>
           <div class="mmx-option-card">
             <div>Max file size in MB</div>
             <input type="number" id="mmx-max-file-size" min="0" step="1" placeholder="empty = no limit">
           </div>
-        </div>
-
-        <div class="mmx-dialog-note mmx-dialog-warning">
-          <strong>Standalone warning:</strong> <code>standalone.html</code> embeds all selected JSON data and exported assets directly into one file.
-          It can become extremely large and may be slow to open or fail in the browser for large exports.
-          For larger exports, copy the complete export folder to a webserver destination and open <code>index.html</code> there.
-          A simple local option is <a href="https://www.apachefriends.org/index.html" target="_blank" rel="noopener noreferrer">XAMPP / Apache Friends</a>.
+          <div class="mmx-option-card mmx-date-range-card">
+            <div class="mmx-field-label">Time range</div>
+            <div class="mmx-date-range-inputs">
+              <label>
+                <span>Start date</span>
+                <input type="date" id="mmx-start-date">
+              </label>
+              <label>
+                <span>End date</span>
+                <input type="date" id="mmx-end-date">
+              </label>
+            </div>
+            <div class="mmx-range-note">Leave empty to export all dates. The end date is included.</div>
+          </div>
         </div>
 
         <div class="mmx-body">
@@ -696,7 +891,7 @@
             <button id="mmx-reload" type="button">Reload</button>
           </div>
           <div id="mmx-tree">
-            <div class="mmx-option-card">Loading Mattermost teams and channels…</div>
+            ${inventoryLoadingHtml()}
           </div>
         </div>
 
@@ -709,7 +904,7 @@
             <div class="mmx-subtitle" id="mmx-selection-summary">No channels loaded.</div>
             <div>
               <button id="mmx-cancel" type="button" disabled>Cancel</button>
-              <button id="mmx-start" type="button">Start export</button>
+              <button id="mmx-start" type="button" disabled>Start export</button>
             </div>
           </div>
         </div>
@@ -725,13 +920,19 @@
     document.getElementById("mmx-select-all").addEventListener("click", () => setAllVisibleChannels(true));
     document.getElementById("mmx-select-none").addEventListener("click", () => setAllVisibleChannels(false));
     document.getElementById("mmx-start").addEventListener("click", startExport);
-    document.getElementById("mmx-cancel").addEventListener("click", () => {
-      runtimeState.cancelRequested = true;
-      updateProgress(0, "Cancelling after the current request finishes…");
-    });
+    document.getElementById("mmx-cancel").addEventListener("click", requestExportCancelAndCloseUi);
   }
 
   async function openDialog() {
+    if (runtimeState.exporting) {
+      if (!runtimeState.cancelRequested) {
+        showCompactProgressDialog();
+      }
+
+      return;
+    }
+
+    hideCompactProgressDialog();
     createDialog();
     document.getElementById("mmx-overlay").classList.remove("mmx-hidden");
 
@@ -744,16 +945,12 @@
 
   function closeDialog() {
     if (runtimeState.exporting) {
-      runtimeState.cancelRequested = true;
-      updateProgress(0, "Cancelling after the current request finishes…");
+      hideFullDialog();
+      showCompactProgressDialog();
       return;
     }
 
-    const overlay = document.getElementById("mmx-overlay");
-
-    if (overlay) {
-      overlay.classList.add("mmx-hidden");
-    }
+    hideFullDialog();
   }
 
   async function tryGetAllUserChannels(meId) {
@@ -769,13 +966,16 @@
   async function loadInventory(forceReload) {
     if (runtimeState.loaded && !forceReload) {
       renderInventoryTree();
+      setInventoryLoading(false);
       return;
     }
 
     const tree = document.getElementById("mmx-tree");
 
+    setInventoryLoading(true);
+
     if (tree) {
-      tree.innerHTML = '<div class="mmx-option-card">Loading Mattermost teams and channels…</div>';
+      tree.innerHTML = inventoryLoadingHtml();
     }
 
     try {
@@ -827,6 +1027,8 @@
       if (tree) {
         tree.innerHTML = '<div class="mmx-option-card mmx-error">' + escapeHtml(error.message || error) + '</div>';
       }
+    } finally {
+      setInventoryLoading(false);
     }
   }
 
@@ -1078,17 +1280,37 @@
     for (let page = 0; ; page++) {
       assertNotCancelled();
 
-      const data = await apiGetJson("/channels/" + channelId + "/posts?page=" + page + "&per_page=" + options.perPage);
+      const params = new URLSearchParams({
+        page: String(page),
+        per_page: String(options.perPage)
+      });
+
+      if (Number.isFinite(options.startCreateAtMs)) {
+        params.set("since", String(Math.max(0, options.startCreateAtMs - 1)));
+      }
+
+      const data = await apiGetJson("/channels/" + channelId + "/posts?" + params.toString());
       const order = Array.isArray(data.order) ? data.order : [];
       const batch = order
         .map(postId => data.posts ? data.posts[postId] : null)
         .filter(Boolean);
+      let newRawPostCount = 0;
 
       for (const rawPost of batch) {
-        if (!seenPostIds.has(rawPost.id)) {
-          seenPostIds.add(rawPost.id);
+        if (seenPostIds.has(rawPost.id)) {
+          continue;
+        }
+
+        seenPostIds.add(rawPost.id);
+        newRawPostCount += 1;
+
+        if (postMatchesTimeRange(rawPost, options)) {
           posts.push(compactPost(rawPost));
         }
+      }
+
+      if (batch.length > 0 && newRawPostCount === 0) {
+        break;
       }
 
       if (batch.length < options.perPage) {
@@ -1204,12 +1426,23 @@
       return;
     }
 
+    if (runtimeState.loadingInventory) {
+      showError("Teams and channels are still loading. Please wait, this can take a minute!");
+      return;
+    }
+
     if (!window.showDirectoryPicker) {
       showError("This browser does not provide showDirectoryPicker(). Use Chrome or Edge on HTTPS/localhost.");
       return;
     }
 
     const options = getOptionsFromDialog();
+
+    if (options.timeRangeError) {
+      showError(options.timeRangeError);
+      return;
+    }
+
     const includeDirectMessages = options.includeDirectMessages;
     const selectedChannels = runtimeState.channels
       .filter(channel => runtimeState.selectedChannels.has(channel.id))
@@ -1226,9 +1459,10 @@
 
     runtimeState.exporting = true;
     runtimeState.cancelRequested = false;
-    document.getElementById("mmx-start").disabled = true;
+    runtimeState.progressClosedAfterCancel = false;
+    hideCompactProgressDialog();
+    updateStartExportButton();
     document.getElementById("mmx-cancel").disabled = false;
-    document.getElementById("mmx-close").disabled = true;
 
     try {
       updateProgress(1, "Choose export destination folder…");
@@ -1259,7 +1493,11 @@
           include_other_files: options.includeOtherFiles,
           include_direct_messages: options.includeDirectMessages,
           create_standalone_html: options.createStandaloneHtml,
-          max_file_bytes: Number.isFinite(options.maxFileBytes) ? options.maxFileBytes : null
+          max_file_bytes: Number.isFinite(options.maxFileBytes) ? options.maxFileBytes : null,
+          start_date: options.startDate || null,
+          end_date: options.endDate || null,
+          start_create_at: Number.isFinite(options.startCreateAtMs) ? options.startCreateAtMs : null,
+          end_create_at_exclusive: Number.isFinite(options.endCreateAtExclusiveMs) ? options.endCreateAtExclusiveMs : null
         },
         teams: teamsForManifest,
         channels: [],
@@ -1368,11 +1606,18 @@
     } catch (error) {
       showError(String(error.message || error));
     } finally {
+      const cancelled = runtimeState.cancelRequested;
+
       runtimeState.exporting = false;
       runtimeState.cancelRequested = false;
-      document.getElementById("mmx-start").disabled = false;
+      runtimeState.progressClosedAfterCancel = false;
+
+      if (!cancelled) {
+        hideCompactProgressDialog();
+      }
+
+      updateStartExportButton();
       document.getElementById("mmx-cancel").disabled = true;
-      document.getElementById("mmx-close").disabled = false;
     }
   }
 
@@ -1654,7 +1899,7 @@
   function renderScopes(){scopeList.innerHTML=state.scopes.map(scope=>{const active=scope.type===state.scopeType&&scope.id===state.scopeId?" active":"";return'<button class="scope-button'+active+'" data-scope-type="'+escapeHtml(scope.type)+'" data-scope-id="'+escapeHtml(scope.id)+'"><div class="scope-title"><span class="scope-icon">'+escapeHtml(scope.icon)+'</span><span class="scope-name">'+escapeHtml(scope.title)+'</span></div><div class="scope-subtitle">'+escapeHtml(scope.subtitle)+'</div></button>'}).join("")||'<div class="empty">Keine Teams oder Direktnachrichten gefunden.</div>'}
   function renderChannelList(){const scope=getCurrentScope();if(!scope){scopeHeading.textContent="Channels";scopeSummary.textContent="";channelList.innerHTML='<div class="empty">Kein Team ausgewählt.</div>';return}const channels=channelsForScope(scope),filter=state.channelFilter.toLowerCase(),visibleChannels=channels.filter(channel=>{const searchable=[channelTitle(channel),channel.purpose||"",channel.header||"",channelTypeLabel(channel.type)].join("\n").toLowerCase();return!filter||searchable.includes(filter)});scopeHeading.textContent=scope.title;scopeSummary.textContent=visibleChannels.length+" von "+channels.length+" Einträgen";channelList.innerHTML=visibleChannels.map(channel=>{const active=channel.id===state.channelId?" active":"",count=channel.post_count||0;return'<button class="channel-button'+active+'" data-channel="'+escapeHtml(channel.id)+'"><div class="channel-title"><span class="channel-icon">'+escapeHtml(channelTypeIcon(channel.type))+'</span><span class="channel-name">'+escapeHtml(channelTitle(channel))+'</span></div><div class="channel-subtitle">'+escapeHtml(channelTypeLabel(channel.type))+' · '+count+' Posts</div></button>'}).join("")||'<div class="empty">Keine passenden Kanäle gefunden.</div>'}
   function renderHeader(channel,posts,rootPosts){const scope=getCurrentScope(),scopeName=scope?scope.title:"",purpose=channel.purpose?'<p>'+escapeHtml(channel.purpose)+'</p>':"",header=channel.header?'<p class="small">'+escapeHtml(channel.header)+'</p>':"";return'<div class="header-card"><div class="header-title-row"><div><h2>'+escapeHtml(channelTitle(channel))+'</h2><div class="small">'+escapeHtml(scopeName)+' · '+escapeHtml(channelTypeLabel(channel.type))+' · '+posts.length+' Posts · '+rootPosts.length+' Hauptnachrichten angezeigt</div></div><div class="header-actions"><button class="action-button" data-copy-link="channel">Link kopieren</button></div></div>'+purpose+header+'</div>'}
-  async function renderChannelContent(){const channel=getCurrentChannel();if(!channel){content.innerHTML='<div class="empty">Kein Kanal ausgewählt.</div>';return}content.innerHTML='<div class="empty">Lade Kanal…</div>';const posts=await loadPostsForChannel(channel);const rootPosts=posts.filter(post=>!post.root_id).filter(post=>hasTextMatch(post,state.messageFilter)).sort((a,b)=>a.create_at-b.create_at);const postHtml=rootPosts.map(post=>renderPost(post,posts,{showThreadButton:true})).join("");content.innerHTML=renderHeader(channel,posts,rootPosts)+(postHtml||'<div class="empty">Keine passenden Nachrichten.</div>');scrollToPostIfRequested()}
+  async function renderChannelContent(){const channel=getCurrentChannel();if(!channel){content.innerHTML='<div class="empty">Kein Kanal ausgewählt.</div>';return}content.innerHTML='<div class="empty">Lade Kanal…</div>';const posts=await loadPostsForChannel(channel),postsById=Object.fromEntries(posts.map(post=>[post.id,post]));const rootPosts=posts.filter(post=>!post.root_id||!postsById[post.root_id]).filter(post=>hasTextMatch(post,state.messageFilter)).sort((a,b)=>a.create_at-b.create_at);const postHtml=rootPosts.map(post=>renderPost(post,posts,{showThreadButton:true})).join("");content.innerHTML=renderHeader(channel,posts,rootPosts)+(postHtml||'<div class="empty">Keine passenden Nachrichten.</div>');scrollToPostIfRequested()}
   async function renderThreadContent(){const channel=getCurrentChannel();if(!channel){await renderChannelContent();return}content.innerHTML='<div class="empty">Lade Thread…</div>';const posts=await loadPostsForChannel(channel),postsById=Object.fromEntries(posts.map(post=>[post.id,post])),root=postsById[state.threadId];if(!root){state.threadId=null;await renderChannelContent();return}const replies=getThreadReplies(posts,root.id).filter(post=>hasTextMatch(post,state.messageFilter)),scope=getCurrentScope();content.innerHTML=['<div class="header-card"><div class="header-title-row"><div><button class="back-button" data-back-channel="'+escapeHtml(channel.id)+'">← Zurück zum Kanal</button><div class="divider"></div><h2>Thread</h2><div class="small">'+escapeHtml(scope?scope.title:"")+' · '+escapeHtml(channelTitle(channel))+' · '+replies.length+' Antworten angezeigt</div></div><div class="header-actions"><button class="action-button" data-copy-link="thread">Thread-Link kopieren</button></div></div></div>',renderPost(root,posts,{showThreadButton:false,threadRoot:true}),'<div class="thread-separator">Antworten</div>',replies.map(post=>renderPost(post,posts,{showThreadButton:false})).join("")||'<div class="empty">Keine passenden Antworten.</div>'].join("");scrollToPostIfRequested()}
   async function render(){renderScopes();renderChannelList();if(state.threadId){await renderThreadContent()}else{await renderChannelContent()}}
   function selectScope(scopeType,scopeId){const scope=state.scopes.find(item=>item.type===scopeType&&item.id===scopeId);if(!scope)return;setHash(scope,firstChannelForScope(scope),null,null)}
