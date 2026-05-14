@@ -1,19 +1,21 @@
 # Mattermost Static Exporter Extension
 
-This unpacked browser extension injects an `export` button into Mattermost pages.
+This unpacked browser extension injects an `export` button into Mattermost pages. 
+
+License: None (use as you like). No liability is taken by the author!
 
 ## Features
 
-- Lower-left `export` button inside Mattermost.
+- Adds an `export` button inside Mattermost at the lower-left corner.
 - Export dialog with options for:
-  - images,
-  - other files,
-  - maximum file size,
+  - including images,
+  - including other files,
+  - setting a maximum file size,
   - start and end date range,
-  - direct messages/group messages.
-- Team and channel selection before export.
+  - include direct messages/group messages.
+- Individual Team and channel as well as direct message and group message selection before export.
 - Progress bar and cancel button during export.
-- Static export folder with the same core structure as before:
+- Static export folder with core structure:
   - `index.html`,
   - `manifest.json`,
   - `users.json`,
@@ -27,38 +29,39 @@ This unpacked browser extension injects an `export` button into Mattermost pages
 - Custom Mattermost emoji written as `:emoji_name:` are resolved and exported when available.
 - Mattermost channel mentions like `~channel-name` are rendered as local links inside the static export.
 - Mattermost message permalinks such as `/team/pl/<post-id>` are rewritten to local export links when the referenced post is part of the export.
-- Generated `index.html` works from a webserver or locally after selecting the export folder.
-- Optional generated `standalone.html` embeds the exported JSON and downloaded assets into one file, so it can be opened by double-clicking without selecting a folder. The export dialog warns that this file can become extremely large.
+- Generated `index.html` works from a webserver or locally (you have to manually select the export folder to grant file access to the browser).
+- Optional generated `standalone.html` embeds the exported JSON and downloaded assets into one file, so it can be opened without selecting a folder. The export dialog warns that this file can become extremely large, so only use for small exports!
 - Direct-message and group-message display names prefer Mattermost nicknames, then full names, then usernames, while original channel fields stay available.
 
-## Installation in Chrome/Edge
+## Installation
+
+0. Download all files from this repository into a directory on your computer, e.g. to [downloads/mattermost-exporter]
+
+
+### Chrome/Edge
 
 1. Open `chrome://extensions/` or `edge://extensions/`.
 2. Enable developer mode.
 3. Click “Load unpacked”.
-4. Select this extension folder.
+4. Select the extension download folder , e.g. [downloads/mattermost-exporter/]
 5. Open Mattermost in the browser.
 6. Click the lower-left `export` button.
 
-## Compatibility note
-
-The export keeps the previous core data layout. Scripts that read `manifest.json`, `users.json`, `data/channels/...`, and `assets/files/...` should continue to work. The emoji, post-link, standalone viewer, and direct-message friendly-name metadata are additive.
+### Firefox [not tested!]
+1. Open `about:debugging#/runtime/this-firefox`
+2. Click "Load Temporary Add-on"
+3. Select `manifest.json` from the download folder, e.g. [downloads/mattermost-exporter/manifest.json]
 
 ## Notes
 
 The extension uses your active Mattermost browser session. It does not need a Mattermost access token or admin permissions. It can only export data that your Mattermost account can read.
 
-For writing the export folder, the browser must support the File System Access API. This usually means Chrome or Edge on HTTPS/localhost.
+For writing the export folder, the browser must support the File System Access API. This usually means Chrome, Edge, or Firefox on HTTPS/localhost.
 
 
 ## Standalone viewer note
 
-`standalone.html` is convenient but can become very large because it embeds JSON chunks and exported image/file data directly. For very large exports, `index.html` plus the folder structure is still the more robust viewer.
-
-
-## Viewer usage guidance
-
-For larger exports, prefer the folder-based `index.html` and copy the complete export folder to a webserver destination. One simple local option is XAMPP / Apache Friends: https://www.apachefriends.org/index.html
+`standalone.html` is convenient but can become very large because it embeds JSON chunks and exported image/file data directly. For very large exports, `index.html` plus the folder structure is the more robust viewer. After opening index.html, select the export directory (usually the same directory where you just opened the index.html). To avoid this additional step, you can simply copy the export directory to a (local) webserver. One simple local option is XAMPP / Apache Friends: https://www.apachefriends.org/index.html
 
 When `index.html` is opened directly from disk, browsers often block automatic reads of neighboring files such as `manifest.json`, `users.json`, `data/`, and `assets/`. The viewer therefore offers two folder-selection mechanisms:
 
