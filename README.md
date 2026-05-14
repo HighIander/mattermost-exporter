@@ -63,7 +63,7 @@ For writing the export folder, the browser must support the File System Access A
 
 ## Standalone viewer note
 
-`standalone.html` is convenient but can become very large because it embeds JSON chunks and exported image/file data directly. For very large exports, you should NOT enable it and leave the checkboc unchecked! In that case, all data can be viewed later simply by opening `index.html` in the export directory. After opening index.html, select the export directory (usually the same directory where you just opened the index.html). To avoid this additional step, you can simply copy the export directory to a (local) webserver. One simple local option is XAMPP / Apache Friends: https://www.apachefriends.org/index.html
+The `standalone.html` option is convenient but can become very large because it embeds JSON chunks and exported image/file data directly. For very large exports, you should NOT enable it and leave the checkboc unchecked! In that case, all data can be viewed later simply by opening `index.html` in the export directory. After opening index.html, select the export directory (usually the same directory where you just opened the index.html). To avoid this additional step, you can simply copy the export directory to a (local) webserver. One simple local option is XAMPP / Apache Friends: https://www.apachefriends.org/index.html
 
 When `index.html` is opened directly from disk, browsers often block automatic reads of neighboring files such as `manifest.json`, `users.json`, `data/`, and `assets/`. The viewer therefore offers two folder-selection mechanisms:
 
