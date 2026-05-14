@@ -1536,11 +1536,6 @@
     document.getElementById("mmx-cancel").disabled = false;
 
     try {
-      updateProgress(1, "Preparing export...");
-      await enrichDirectChannelNames(selectedChannels);
-      assertNotCancelled();
-      selectedChannels.sort((a, b) => compareByTitle(a, b, channelTitle));
-
       updateProgress(1, "Choose export destination folder…");
 
       const chosenDirectory = await window.showDirectoryPicker({
@@ -1548,6 +1543,11 @@
       });
 
       assertNotCancelled();
+
+      updateProgress(2, "Preparing export...");
+      await enrichDirectChannelNames(selectedChannels);
+      assertNotCancelled();
+      selectedChannels.sort((a, b) => compareByTitle(a, b, channelTitle));
 
       const exportFolderName = "mattermost-export-" + todayString();
       const exportRoot = await chosenDirectory.getDirectoryHandle(exportFolderName, { create: true });
