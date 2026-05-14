@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "Mattermost Static Exporter",
+  "version": "1.3.0",
+  "description": "Export visible Mattermost teams, channels, DMs, posts, attachments, custom emoji, local links, and optional standalone HTML to a static folder with webserver/local usage guidance.",
+  "permissions": [],
+  "host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "css": [
+        "content.css"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}
