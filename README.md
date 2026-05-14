@@ -36,7 +36,7 @@ License: None (use as you like). No liability is taken by the author!
 
 ## Installation
 
-0. Download all files from this repository into a directory on your computer, e.g. to [downloads/mattermost-exporter]
+0. Download all files from this repository into a directory on your computer, e.g. to [downloads/mattermost-exporter]. You can download a zip file and extract it on your computer from the latest release here: https://github.com/HighIander/mattermost-exporter/releases
 
 
 ### Chrome/Edge
