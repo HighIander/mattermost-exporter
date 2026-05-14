@@ -23,6 +23,7 @@
     loadingInventory: false,
     exporting: false,
     cancelRequested: false,
+    exportAbortController: null,
     progressPercent: 0,
     progressText: "",
     progressIsError: false,
@@ -174,6 +175,7 @@
     const response = await fetch(apiPath(path), {
       method: "GET",
       credentials: "include",
+      signal: runtimeState.exportAbortController ? runtimeState.exportAbortController.signal : undefined,
       headers: {
         "Accept": "application/json"
       }
@@ -190,7 +192,8 @@
   async function apiGetBlob(path) {
     const response = await fetch(apiPath(path), {
       method: "GET",
-      credentials: "include"
+      credentials: "include",
+      signal: runtimeState.exportAbortController ? runtimeState.exportAbortController.signal : undefined
     });
 
     if (!response.ok) {
@@ -352,6 +355,10 @@
       runtimeState.userCache.set(userId, user);
       return user;
     } catch (error) {
+      if (isCancellationError(error)) {
+        throw error;
+      }
+
       const user = {
         id: userId,
         username: userId,
@@ -381,6 +388,10 @@
       runtimeState.directChannelMemberCache.set(channelId, memberIds);
       return memberIds;
     } catch (error) {
+      if (isCancellationError(error)) {
+        throw error;
+      }
+
       console.warn("Could not load channel members for " + channelId, error);
       runtimeState.directChannelMemberCache.set(channelId, []);
       return [];
@@ -396,12 +407,14 @@
     const directChannels = channels.filter(isDirectChannel);
 
     for (const channel of directChannels) {
+      assertNotCancelled();
       const memberIds = await getChannelMemberIds(channel.id);
       const usersById = {};
 
       channel.member_ids = memberIds;
 
       for (const userId of memberIds) {
+        assertNotCancelled();
         const user = await getUserCached(userId);
 
         if (user) {
@@ -411,6 +424,7 @@
 
       applyFriendlyDirectChannelName(channel, usersById, runtimeState.me ? runtimeState.me.id : "");
       await sleep(DEFAULTS.requestDelayMs);
+      assertNotCancelled();
     }
   }
 
@@ -420,6 +434,26 @@
     }
 
     return team.display_name || team.name || team.id || "";
+  }
+
+  function teamTitleForChannel(channel) {
+    if (!channel) {
+      return "";
+    }
+
+    if (isDirectChannel(channel)) {
+      return "Direct messages";
+    }
+
+    const team = runtimeState.teams.find(item => item.id === channel.team_id);
+    return teamTitle(team) || "Other channels";
+  }
+
+  function exportProgressChannelLabel(channel) {
+    const teamLabel = teamTitleForChannel(channel);
+    const channelLabel = channelTitle(channel);
+
+    return teamLabel ? teamLabel + " / " + channelLabel : channelLabel;
   }
 
   function channelTypeIcon(type) {
@@ -597,11 +631,19 @@
           emoji.exported = true;
           emoji.relative_path = relativePath;
         } catch (error) {
+          if (isCancellationError(error)) {
+            throw error;
+          }
+
           emoji.error = String(error.message || error);
         }
 
         emojis[name] = emoji;
       } catch (error) {
+        if (isCancellationError(error)) {
+          throw error;
+        }
+
         /*
          * A 404 here usually means the shortcode is a built-in/system emoji,
          * not a custom Mattermost emoji. It remains visible as text fallback.
@@ -757,6 +799,9 @@
   function requestExportCancelAndCloseUi() {
     runtimeState.cancelRequested = true;
     runtimeState.progressClosedAfterCancel = true;
+    if (runtimeState.exportAbortController) {
+      runtimeState.exportAbortController.abort();
+    }
     updateProgress(runtimeState.progressPercent, "Cancelling after the current request finishes...");
     hideFullDialog();
     hideCompactProgressDialog();
@@ -781,9 +826,25 @@
     }
   }
 
+  function createCancellationError() {
+    const error = new Error("Export cancelled by user.");
+    error.name = "MMXCancellationError";
+    return error;
+  }
+
+  function isCancellationError(error) {
+    return Boolean(
+      error &&
+      (
+        error.name === "MMXCancellationError" ||
+        (runtimeState.cancelRequested && error.name === "AbortError")
+      )
+    );
+  }
+
   function assertNotCancelled() {
     if (runtimeState.cancelRequested) {
-      throw new Error("Export cancelled by user.");
+      throw createCancellationError();
     }
   }
 
@@ -1359,6 +1420,10 @@
                 info.exported = true;
                 info.relative_path = relativePath;
               } catch (error) {
+                if (isCancellationError(error)) {
+                  throw error;
+                }
+
                 info.error = String(error.message || error);
               }
 
@@ -1369,6 +1434,10 @@
           post.file_infos.push(info);
         }
       } catch (error) {
+        if (isCancellationError(error)) {
+          throw error;
+        }
+
         post.file_infos.push({
           id: "",
           name: "",
@@ -1404,6 +1473,10 @@
         runtimeState.userCache.set(userId, user);
         users[userId] = user;
       } catch (error) {
+        if (isCancellationError(error)) {
+          throw error;
+        }
+
         users[userId] = {
           id: userId,
           username: userId,
@@ -1454,17 +1527,20 @@
       return;
     }
 
-    await enrichDirectChannelNames(selectedChannels);
-    selectedChannels.sort((a, b) => compareByTitle(a, b, channelTitle));
-
     runtimeState.exporting = true;
     runtimeState.cancelRequested = false;
+    runtimeState.exportAbortController = new AbortController();
     runtimeState.progressClosedAfterCancel = false;
     hideCompactProgressDialog();
     updateStartExportButton();
     document.getElementById("mmx-cancel").disabled = false;
 
     try {
+      updateProgress(1, "Preparing export...");
+      await enrichDirectChannelNames(selectedChannels);
+      assertNotCancelled();
+      selectedChannels.sort((a, b) => compareByTitle(a, b, channelTitle));
+
       updateProgress(1, "Choose export destination folder…");
 
       const chosenDirectory = await window.showDirectoryPicker({
@@ -1514,7 +1590,7 @@
         const channel = selectedChannels[channelIndex];
         const basePercent = 5 + (channelIndex / selectedChannels.length) * 85;
         const nextPercent = 5 + ((channelIndex + 1) / selectedChannels.length) * 85;
-        const label = channelTitle(channel);
+        const label = exportProgressChannelLabel(channel);
 
         updateProgress(basePercent, "Exporting channel " + (channelIndex + 1) + " / " + selectedChannels.length + ": " + label + "\nLoading posts…");
 
@@ -1578,6 +1654,10 @@
             channelRecord.post_files.push(filePath);
           }
         } catch (error) {
+          if (isCancellationError(error)) {
+            throw error;
+          }
+
           channelRecord.error = String(error.message || error);
         }
 
@@ -1604,12 +1684,17 @@
 
       updateProgress(100, "Export finished. Use standalone.html for double-click viewing, or index.html with the complete folder on a webserver/local folder selection.");
     } catch (error) {
-      showError(String(error.message || error));
+      if (isCancellationError(error)) {
+        updateProgress(runtimeState.progressPercent, "Export cancelled.");
+      } else {
+        showError(String(error.message || error));
+      }
     } finally {
       const cancelled = runtimeState.cancelRequested;
 
       runtimeState.exporting = false;
       runtimeState.cancelRequested = false;
+      runtimeState.exportAbortController = null;
       runtimeState.progressClosedAfterCancel = false;
 
       if (!cancelled) {
@@ -1789,6 +1874,10 @@
         const file = await readFileFromExportRoot(exportRoot, assetPath);
         await writeEmbeddedAssetAssignment(writable, assetPath, file);
       } catch (error) {
+        if (isCancellationError(error)) {
+          throw error;
+        }
+
         console.warn("Could not embed asset in standalone.html: " + assetPath, error);
       }
     }
